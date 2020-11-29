@@ -42,11 +42,11 @@ class MinModDiff(nn.Module):
                                 [ 0., 0., 0., 0., 0., 0., 0.]]]]) / 9
 
         self.pad = torch.nn.ReplicationPad2d(padding=3)
-        self.diff_kernel = torch.cat(tuple(diff_kernels.values()), dim=0).expand(len(diff_kernels), 1, 7, 7)
+        self.diff_kernel = nn.Parameter(torch.cat(tuple(diff_kernels.values()), dim=0).expand(len(diff_kernels), 1, 7, 7))
 
     def forward(self, input, mode='minmod'):
-        if self.diff_kernel.device != input.device:
-            self.diff_kernel = self.diff_kernel.to(input.device)
+        #if self.diff_kernel.device != input.device:
+        #    self.diff_kernel = self.diff_kernel.to(input.device)
 
         N, _, H, W = input.shape
         padded_map = self.pad(input)

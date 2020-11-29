@@ -350,15 +350,22 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.distributed:
         if args.gpu is not None:
             torch.cuda.set_device(args.gpu)
+            
             model.cuda(args.gpu)
+            nd_model.cuda(args.gpu)
+            
             args.batch_size = int(args.batch_size / ngpus_per_node)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
+            nd_model = torch.nn.parallel.DistributedDataParallel(nd_model, device_ids=[args.gpu], find_unused_parameters=True)
         else:
             model.cuda()
             model = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
     else:
         model = torch.nn.DataParallel(model)
         model.cuda()
+
+        nd_model = torch.nn.DataParallel(nd_model)
+        nd_model.cuda()
 
     if args.distributed:
         print("Model Initialized on GPU: {}".format(args.gpu))
@@ -459,9 +466,9 @@ def main_worker(gpu, ngpus_per_node, args):
             
             disp_gt = 1 / depth_gt
             disp_gt[~valid_bmask_gt] = 0.
-            disp_est = torch.zeros_like(depth_est, device=depth_est.device)
-            disp_est[depth_est!=0] = (1/depth_est)[depth_est!=0]
 
+            disp_est = torch.zeros_like(depth_est, device=depth_est.device)
+            disp_est[depth_est>0] = (1/depth_est)[depth_est>0]
 
             loss_silog = silog_criterion.forward(depth_est, depth_gt, mask.to(torch.bool))
             
