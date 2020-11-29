@@ -16,21 +16,19 @@ class NormDiff(nn.Module):
         self.pixel_norm = PixelNorm(nd_const)
 
     def forward(self, input):
-        valid_bmask = (input != 0)
+        valid_bmask = input != 0
 
         depth = torch.zeros_like(input, device=input.device)
         depth[valid_bmask] = input[valid_bmask]
         depth[~valid_bmask] = -100.
 
         diff_map = self.minmod_diff(depth)
-        N, _, H, W = diff_map.shape
-
         invd_bmask = diff_map.abs() > 10.
-        invd_bmask = (invd_bmask[:,0:1] | invd_bmask[:,1:2]).expand(-1, 3,-1,-1)
+        print(invd_bmask.shape)
         nd_map = self.pixel_norm(diff_map, dim=1)
 
-        nd_final = torch.zeros(N, 3, H, W, device=nd_map.device)
-        diff_final = torch.zeros(N, 3, H, W, device=diff_map.device)
+        nd_final = torch.zeros_like(nd_map, device=nd_map.device)
+        diff_final = torch.zeros_like(diff_map, device=diff_map.device)
 
         #paint_true_depth(inv_bmask[0,0:1].float())
 
