@@ -25,7 +25,7 @@ class PixelNormAdd(nn.Module):
         
         
         cated = torch.cat((input, add_channel), dim=dim)
-        print(cated.shape, shape)
+        #print(cated.shape, shape)
         norm = (cated ** 2).sum(dim=dim, keepdim=True)
         norm = norm.sqrt()
         norm = norm.expand(shape)

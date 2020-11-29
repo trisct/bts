@@ -41,6 +41,7 @@ from bts import BtsModel
 from bts_dataloader_depth_eval import *
 
 from ndmodel3.nd_mod import NormDiff
+from ndmodel3.cwsm import ChannelWiseSoftmax
 from paint_utils.paint import paint_multiple, paint_true_depth
 from paint_utils.img2pcd import img2pcd
 
@@ -262,7 +263,8 @@ def main_worker(gpu, ngpus_per_node, args):
         print("Use GPU: {} for training".format(args.gpu))
 
     # Create model
-    nd_model = NormDiff(5e-4)
+    nd_model = NormDiff(2e-4).cuda()
+    cs_model = ChannelWiseSoftmax().cuda()
     
     global_step = 0
     
@@ -303,8 +305,8 @@ def main_worker(gpu, ngpus_per_node, args):
             #loss_silog = silog_criterion.forward(depth_est, depth_gt, mask.to(torch.bool))
             
             nd_gt, diff_gt, invd_bmask = nd_model(disp_gt)
-            nd_gt = F.avg_pool2d(nd_gt, kernel_size=5, stride=1, padding=2)
-            nd_gt = F.avg_pool2d(nd_gt, kernel_size=5, stride=1, padding=2)
+            #nd_gt = F.avg_pool2d(nd_gt, kernel_size=5, stride=1, padding=2)
+            #nd_gt = F.avg_pool2d(nd_gt, kernel_size=5, stride=1, padding=2)
             #nd_est, diff_est, _ = nd_model(depth_est)
             
             
@@ -323,11 +325,64 @@ def main_worker(gpu, ngpus_per_node, args):
             print('max = %.8f' % diff_xy_len_list.max())
             print('mean = %.8f' % mean_val)
 
-            mean_plane = mean_val.reshape(1, 1, 1, 1).expand(N, 1, H, W)
+            #mean_plane = mean_val.reshape(1, 1, 1, 1).expand(N, 1, H, W)
+
+            nd_cls = cs_model(nd_gt, dim=1, scaling=10)
             
-            img2pcd(nd_gt[0,0:1])
-            img2pcd(nd_gt[0,1:2])
-            img2pcd(nd_gt[0,2:3])
+            N, _, H, W = nd_cls.shape
+            cls_map = torch.zeros(N, 3, H, W, device=nd_cls.device)
+
+            up_thresh = .98
+
+
+            # all classes tegether
+            cls_map[:,0:1][nd_cls[:,0:1] > up_thresh] = 1.
+            cls_map[:,1:2][nd_cls[:,0:1] > up_thresh] = 1.
+            
+            cls_map[:,0:1][nd_cls[:,1:2] > up_thresh] = 1.
+            cls_map[:,2:3][nd_cls[:,1:2] > up_thresh] = 1.
+
+            cls_map[:,1:2][nd_cls[:,2:3] > up_thresh] = 1.
+            cls_map[:,2:3][nd_cls[:,2:3] > up_thresh] = 1.
+
+            cls_map[:,0:1][nd_cls[:,3:4] > up_thresh] = 1.
+            
+            cls_map[:,1:2][nd_cls[:,4:5] > up_thresh] = 1.
+
+            # different planes
+            cls_l = torch.zeros(N, 3, H, W, device=nd_cls.device)
+            cls_r = cls_l.clone()
+            cls_d = cls_l.clone()
+            cls_u = cls_l.clone()
+            cls_b = cls_l.clone()
+
+            cls_r[:,0:1][nd_cls[:,0:1] > up_thresh] = 1. # channel 0 is for 'sure'
+            cls_r[:,2:3][nd_cls[:,0:1] < 1-up_thresh] = 1. # channel 2 is for 'surely not'
+            # channel 1 is for 'not sure'
+
+            cls_l[:,0:1][nd_cls[:,1:2] > up_thresh] = 1.
+            cls_l[:,2:3][nd_cls[:,1:2] < 1-up_thresh] = 1.
+            
+            cls_u[:,0:1][nd_cls[:,2:3] > up_thresh] = 1. # channel 1
+            cls_u[:,2:3][nd_cls[:,2:3] < 1-up_thresh] = 1. # channel 1
+            
+            cls_d[:,0:1][nd_cls[:,3:4] > up_thresh] = 1. # channel 1
+            cls_d[:,2:3][nd_cls[:,3:4] < 1-up_thresh] = 1. # channel 1
+
+            cls_b[:,0:1][nd_cls[:,4:5] > up_thresh] = 1. # channel 1
+            cls_b[:,2:3][nd_cls[:,4:5] < 1-up_thresh] = 1. # channel 1
+
+            paint_multiple(nd_gt[0], cls_map[0], cls_l[0], cls_r[0],
+                           depth_gt[0], cls_u[0], cls_d[0], cls_b[0],
+                           images_per_row=4)
+            
+            #img2pcd(nd_gt[0,0:1])
+            #img2pcd(nd_gt[0,1:2])
+            #img2pcd(nd_gt[0,2:3])
+            #img2pcd(nd_gt[0,3:4])
+            #img2pcd(nd_gt[0,4:5])
+            #img2pcd(nd_gt[0,5:6])
+
             #img2pcd(diff_xy_len[0], mean_plane[0])
 
             #plt.scatter(range(len(diff_xy_len_list)), diff_xy_len_list)
