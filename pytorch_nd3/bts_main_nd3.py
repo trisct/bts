@@ -468,7 +468,7 @@ def main_worker(gpu, ngpus_per_node, args):
             loss = loss_silog + loss_nd + loss_diff
             loss.backward()
 
-            if global_step % 1 == 0:
+            if global_step % 300 == 0:
                 paint_multiple(image[0].cpu().detach(), depth_est[0].cpu().detach(), depth_gt[0].cpu().detach(),
                            None, nd_est[0].cpu().detach(), nd_gt[0].cpu().detach(),
                            None, diff_est[0].cpu().detach(), diff_gt[0].cpu().detach(), images_per_row=3,
