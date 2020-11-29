@@ -468,15 +468,15 @@ def main_worker(gpu, ngpus_per_node, args):
             nd_gt, diff_gt, invd_bmask = nd_model(disp_gt)
             nd_est, diff_est, _ = nd_model(disp_est)
             
-            current_coef = (1-.5) * (1-global_step / num_total_steps) ** .9 + .5
+            current_coef = (1-.6) * (1-global_step / num_total_steps) ** .9 + .5
 
-            loss_nd = current_coef * 5 * mse_criterion(nd_est[~invd_bmask.expand(-1,3,-1,-1)], nd_gt[~invd_bmask.expand(-1,3,-1,-1)])
-            loss_diff = current_coef * 1e2 * mse_criterion(diff_gt[~invd_bmask.expand(-1,2,-1,-1)], diff_est[~invd_bmask.expand(-1,2,-1,-1)])
+            loss_nd = current_coef * 10 * mse_criterion(nd_est[~invd_bmask.expand(-1,3,-1,-1)], nd_gt[~invd_bmask.expand(-1,3,-1,-1)])
+            loss_diff = current_coef * 1e3 * mse_criterion(diff_gt[~invd_bmask.expand(-1,2,-1,-1)], diff_est[~invd_bmask.expand(-1,2,-1,-1)])
             
             loss = loss_silog + loss_nd + loss_diff
             loss.backward()
 
-            if global_step % 1 == 0:
+            if global_step % 200 == 0:
                 paint_multiple(image[0].cpu().detach(), depth_est[0].cpu().detach(), depth_gt[0].cpu().detach(),
                            None, nd_est[0].cpu().detach(), nd_gt[0].cpu().detach(),
                            None, diff_est[0].cpu().detach(), diff_gt[0].cpu().detach(), images_per_row=3,
