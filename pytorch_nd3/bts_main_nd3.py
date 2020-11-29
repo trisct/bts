@@ -336,7 +336,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Create model
     model = BtsModel(args)
-    nd_model = NormDiff(1e-3)
+    nd_model = NormDiff(5e-4)
     model.train()
     model.decoder.apply(weights_init_xavier)
     set_misc(model)
@@ -455,10 +455,18 @@ def main_worker(gpu, ngpus_per_node, args):
             else:
                 mask = depth_gt > 1.0
 
+            valid_bmask_gt = mask & (depth_gt != 0)
+            
+            disp_gt = 1 / depth_gt
+            disp_gt[~valid_bmask_gt] = 0.
+            disp_est = torch.zeros_like(depth_est, device=depth_est.device)
+            disp_est[depth_est!=0] = (1/depth_est)[depth_est!=0]
+
+
             loss_silog = silog_criterion.forward(depth_est, depth_gt, mask.to(torch.bool))
             
-            nd_gt, diff_gt, invd_bmask = nd_model(depth_gt)
-            nd_est, diff_est, _ = nd_model(depth_est)
+            nd_gt, diff_gt, invd_bmask = nd_model(disp_gt)
+            nd_est, diff_est, _ = nd_model(disp_est)
             
             current_coef = (1-.5) * (1-global_step / num_total_steps) ** .9 + .5
 
@@ -468,7 +476,7 @@ def main_worker(gpu, ngpus_per_node, args):
             loss = loss_silog + loss_nd + loss_diff
             loss.backward()
 
-            if global_step % 200 == 0:
+            if global_step % 1 == 0:
                 paint_multiple(image[0].cpu().detach(), depth_est[0].cpu().detach(), depth_gt[0].cpu().detach(),
                            None, nd_est[0].cpu().detach(), nd_gt[0].cpu().detach(),
                            None, diff_est[0].cpu().detach(), diff_gt[0].cpu().detach(), images_per_row=3,
