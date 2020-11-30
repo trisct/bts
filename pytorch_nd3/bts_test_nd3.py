@@ -35,7 +35,6 @@ from tqdm import tqdm
 from ndmodel3.nd_mod import NormDiff
 from paint_utils.paint import paint_multiple
 
-nd_model = NormDiff(1e-3)
 
 
 def convert_arg_line_to_args(arg_line):
@@ -67,6 +66,8 @@ parser.add_argument('--gt_path_eval',              type=str,   help='path to the
 parser.add_argument('--filenames_file_eval',       type=str,   help='path to the filenames text file for online evaluation', required=False)
 
 parser.add_argument('--distributed',       action='store_true')
+parser.add_argument('--no_ndvis_log',    action='store_true',   help='Don\'t output nd maps when testing. Saves time.')
+
 
 if sys.argv.__len__() == 2:
     arg_filename_with_prefix = '@' + sys.argv[1]
@@ -96,12 +97,20 @@ def test(params):
     dataloader = BtsDataLoader(args, 'online_eval')
     
     model = BtsModel(params=args)
+    nd_model = NormDiff(5e-4)
+
     model = torch.nn.DataParallel(model)
+    nd_model = torch.nn.DataParallel(nd_model)
     
     checkpoint = torch.load(args.checkpoint_path)
     model.load_state_dict(checkpoint['model'])
+
     model.eval()
     model.cuda()
+
+    nd_model.eval()
+    nd_model.cuda()
+
 
     num_test_samples = get_num_lines(args.filenames_file)
 
@@ -148,19 +157,28 @@ def test(params):
             pred_2x2s.append(lpg2x2[0].cpu().numpy().squeeze())
             pred_1x1s.append(reduc1x1[0].cpu().numpy().squeeze())
 
-            depth_est[:,:,0,0] = 0.
-            nd_gt, diff_gt, invd_bmask = nd_model(depth_gt)
-            nd_est, diff_est, _ = nd_model(depth_est)
+            
+            disp_gt = 1 / depth_gt
+            disp_est = 1 / depth_est
+
+            disp_gt[depth_gt <= 0.] = 0.
+            disp_est[depth_est <= 0.] = 0.
+
+            disp_est[:,:,0,0] = 0.
+
+            nd_gt, diff_gt, invd_bmask = nd_model(disp_est)
+            nd_est, diff_est, _ = nd_model(disp_est)
 
             ### with nd paint
             scene_name = lines[s].split()[0].split('/')[0]
             filename_nd_png = save_name + '/nd/' + scene_name + '_' + lines[s].split()[0].split('/')[1].replace('.jpg', '.png')
 
-            paint_multiple(image[0].cpu().detach(), depth_est[0].cpu().detach(), depth_gt[0].cpu().detach(),
-                           None, nd_est[0].cpu().detach(), nd_gt[0].cpu().detach(),
-                           None, diff_est[0].cpu().detach(), diff_gt[0].cpu().detach(), images_per_row=3,
-                           to_screen=False,
-                           to_file=filename_nd_png)
+            if not args.no_ndvis_log:
+                paint_multiple(image[0].cpu().detach(), depth_est[0].cpu().detach(), depth_gt[0].cpu().detach(),
+                               None, nd_est[0].cpu().detach(), nd_gt[0].cpu().detach(),
+                               None, diff_est[0].cpu().detach(), diff_gt[0].cpu().detach(), images_per_row=3,
+                               to_screen=False,
+                               to_file=filename_nd_png)
             
 
     elapsed_time = time.time() - start_time
