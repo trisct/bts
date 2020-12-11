@@ -63,7 +63,10 @@ class atrous_conv(nn.Sequential):
                                                                               padding=(dilation, dilation), dilation=dilation)))
 
     def forward(self, x):
-        return self.atrous_conv.forward(x)
+        print('[HERE: In /pytorch_nd3/bts/astrous_conv] input shape:', x.shape)
+        output = self.atrous_conv(x)
+        print('[HERE: In /pytorch_nd3/bts/astrous_conv] output shape:', output.shape)
+        return output
     
 
 class upconv(nn.Module):
@@ -143,7 +146,11 @@ class local_planar_guidance(nn.Module):
         v = self.v.repeat(plane_eq.size(0), plane_eq.size(2), plane_eq.size(3) * int(self.upratio)).cuda()
         v = (v - (self.upratio - 1) * 0.5) / self.upratio
 
-        return n4 / (n1 * u + n2 * v + n3)
+        output = n4 / (n1 * u + n2 * v + n3)
+        print('[HERE: In /pytorch_nd3/bts/local_planar_guidance] output shape:', output.shape)
+        print('[HERE: In /pytorch_nd3/bts/local_planar_guidance] denominator min:', (n1 * u + n2 * v + n3).min())
+
+        return output
 
 class bts(nn.Module):
     def __init__(self, params, feat_out_channels, num_features=512):
