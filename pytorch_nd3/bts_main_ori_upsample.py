@@ -38,6 +38,8 @@ from tqdm import tqdm
 from bts_upsample import BtsModel
 from bts_dataloader import *
 
+from ndmodel3.nd_mod import NormDiff
+from paint_utils.paint import paint_multiple, paint_true_depth
 
 def convert_arg_line_to_args(arg_line):
     for arg in arg_line.split():
@@ -113,7 +115,6 @@ parser.add_argument('--eval_freq',                 type=int,   help='Online eval
 parser.add_argument('--eval_summary_directory',    type=str,   help='output directory for eval summary,'
                                                                     'if empty outputs to checkpoint folder', default='')
 
-parser.add_argument('--debug', action='store_true', help='outputs debug information')
 
 if sys.argv.__len__() == 2:
     arg_filename_with_prefix = '@' + sys.argv[1]
@@ -336,6 +337,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Create model
     model = BtsModel(args)
+    nd_model = NormDiff(5e-4)
     model.train()
     model.decoder.apply(weights_init_xavier)
     set_misc(model)
@@ -349,15 +351,22 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.distributed:
         if args.gpu is not None:
             torch.cuda.set_device(args.gpu)
+            
             model.cuda(args.gpu)
+            nd_model.cuda(args.gpu)
+            
             args.batch_size = int(args.batch_size / ngpus_per_node)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
+            nd_model = torch.nn.parallel.DistributedDataParallel(nd_model, device_ids=[args.gpu], find_unused_parameters=True)
         else:
             model.cuda()
             model = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
     else:
         model = torch.nn.DataParallel(model)
         model.cuda()
+
+        nd_model = torch.nn.DataParallel(nd_model)
+        nd_model.cuda()
 
     if args.distributed:
         print("Model Initialized on GPU: {}".format(args.gpu))
@@ -417,6 +426,7 @@ def main_worker(gpu, ngpus_per_node, args):
             eval_summary_writer = SummaryWriter(eval_summary_path, flush_secs=30)
 
     silog_criterion = silog_loss(variance_focus=args.variance_focus)
+    #mse_criterion = nn.MSELoss()
 
     start_time = time.time()
     duration = 0
@@ -453,8 +463,34 @@ def main_worker(gpu, ngpus_per_node, args):
             else:
                 mask = depth_gt > 1.0
 
-            loss = silog_criterion.forward(depth_est, depth_gt, mask.to(torch.bool))
+            valid_bmask_gt = mask & (depth_gt != 0)
+            
+            disp_gt = 1 / depth_gt
+            disp_gt[~valid_bmask_gt] = 0.
+
+            disp_est = torch.zeros_like(depth_est, device=depth_est.device)
+            disp_est[depth_est>0] = (1/depth_est)[depth_est>0]
+
+            loss_silog = silog_criterion.forward(depth_est, depth_gt, mask.to(torch.bool))
+            
+            nd_gt, diff_gt, invd_bmask = nd_model(disp_gt)
+            nd_est, diff_est, _ = nd_model(disp_est)
+            
+            # nd maps are still computed by not used in supervision. 
+            #current_coef = (1-.6) * (1-global_step / num_total_steps) ** .9 + .5
+
+            #loss_nd = current_coef * 10 * mse_criterion(nd_est[~invd_bmask.expand(-1,3,-1,-1)], nd_gt[~invd_bmask.expand(-1,3,-1,-1)])
+            #loss_diff = current_coef * 1e3 * mse_criterion(diff_gt[~invd_bmask.expand(-1,2,-1,-1)], diff_est[~invd_bmask.expand(-1,2,-1,-1)])
+            
+            loss = loss_silog # + loss_nd + loss_diff
             loss.backward()
+
+            if global_step % 200 == 0:
+                paint_multiple(image[0].cpu().detach(), depth_est[0].cpu().detach(), depth_gt[0].cpu().detach(),
+                           None, nd_est[0].cpu().detach(), nd_gt[0].cpu().detach(),
+                           None, diff_est[0].cpu().detach(), diff_gt[0].cpu().detach(), images_per_row=3,
+                           to_screen=False,
+                           to_file=(args.log_directory + '/' + args.model_name + '/images_save/' + 'img_%d.png'%global_step))
             for param_group in optimizer.param_groups:
                 current_lr = (args.learning_rate - end_learning_rate) * (1 - global_step / num_total_steps) ** 0.9 + end_learning_rate
                 param_group['lr'] = current_lr
@@ -462,7 +498,7 @@ def main_worker(gpu, ngpus_per_node, args):
             optimizer.step()
 
             if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
-                print('[epoch][s/s_per_e/gs]: [{}][{}/{}/{}], lr: {:.12f}, loss: {:.12f}'.format(epoch, step, steps_per_epoch, global_step, current_lr, loss))
+                print('[epoch][s/s_per_e/gs]: [{}][{}/{}/{}], lr: {:.12f}, loss_silog: {:.8f}'.format(epoch, step, steps_per_epoch, global_step, current_lr, loss_silog))
                 if np.isnan(loss.cpu().item()):
                     print('NaN in loss occurred. Aborting training.')
                     return -1
@@ -478,12 +514,12 @@ def main_worker(gpu, ngpus_per_node, args):
                 training_time_left = (num_total_steps / global_step - 1.0) * time_sofar
                 if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
                     print("{}".format(args.model_name))
-                print_string = 'GPU: {} | examples/s: {:4.2f} | loss: {:.5f} | var sum: {:.3f} avg: {:.3f} | time elapsed: {:.2f}h | time left: {:.2f}h'
-                print(print_string.format(args.gpu, examples_per_sec, loss, var_sum.item(), var_sum.item()/var_cnt, time_sofar, training_time_left))
+                print_string = 'GPU: {} | examples/s: {:4.2f} | loss_silog: {:.5f} | var sum: {:.3f} avg: {:.3f} | time elapsed: {:.2f}h | time left: {:.2f}h'
+                print(print_string.format(args.gpu, examples_per_sec, loss_silog, var_sum.item(), var_sum.item()/var_cnt, time_sofar, training_time_left))
 
                 if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                                                             and args.rank % ngpus_per_node == 0):
-                    writer.add_scalar('silog_loss', loss, global_step)
+                    writer.add_scalar('silog_loss', loss_silog, global_step)
                     writer.add_scalar('learning_rate', current_lr, global_step)
                     writer.add_scalar('var average', var_sum.item()/var_cnt, global_step)
                     depth_gt = torch.where(depth_gt < 1e-3, depth_gt * 0 + 1e3, depth_gt)
@@ -560,16 +596,19 @@ def main():
     command = 'mkdir ' + args.log_directory + '/' + args.model_name
     os.system(command)
 
+    command = 'mkdir ' + args.log_directory + '/' + args.model_name + '/images_save'
+    os.system(command)
+
     args_out_path = args.log_directory + '/' + args.model_name + '/' + sys.argv[1]
     command = 'cp ' + sys.argv[1] + ' ' + args_out_path
     os.system(command)
 
     if args.checkpoint_path == '':
         model_out_path = args.log_directory + '/' + args.model_name + '/' + model_filename
-        command = 'cp bts_upsample.py ' + model_out_path
+        command = 'cp bts.py ' + model_out_path
         os.system(command)
         aux_out_path = args.log_directory + '/' + args.model_name + '/.'
-        command = 'cp bts_main_upsample.py ' + aux_out_path
+        command = 'cp bts_main.py ' + aux_out_path
         os.system(command)
         command = 'cp bts_dataloader.py ' + aux_out_path
         os.system(command)
