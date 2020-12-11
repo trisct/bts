@@ -63,9 +63,12 @@ class atrous_conv(nn.Sequential):
                                                                               padding=(dilation, dilation), dilation=dilation)))
 
     def forward(self, x):
-        print('[HERE: In /pytorch_nd3/bts/astrous_conv] input shape:', x.shape)
+        # args.debug not implemented yet
+        #if args.debug:
+        #    print('[HERE: In /pytorch_nd3/bts/astrous_conv] input shape:', x.shape)
         output = self.atrous_conv(x)
-        print('[HERE: In /pytorch_nd3/bts/astrous_conv] output shape:', output.shape)
+        #if args.debug:
+        #    print('[HERE: In /pytorch_nd3/bts/astrous_conv] output shape:', output.shape)
         return output
     
 
@@ -77,7 +80,7 @@ class upconv(nn.Module):
         self.ratio = ratio
         
     def forward(self, x):
-        up_x = torch_nn_func.interpolate(x, scale_factor=self.ratio, mode='nearest')
+        up_x = torch_nn_func.interpolate(x, scale_factor=self.ratio, mode='bilinear')
         out = self.conv(up_x)
         out = self.elu(out)
         return out
@@ -98,7 +101,7 @@ class reduction_1x1(nn.Sequential):
                                                                                  kernel_size=1, stride=1, padding=0),
                                                                        nn.Sigmoid()))
                 else:
-                    self.reduc.add_module('plane_params', torch.nn.Conv2d(num_in_filters, out_channels=3, bias=False,
+                    self.reduc.add_module('plane_params', torch.nn.Conv2d(num_in_filters, out_channels=1, bias=False,
                                                                           kernel_size=1, stride=1, padding=0))
                 break
             else:
@@ -113,14 +116,9 @@ class reduction_1x1(nn.Sequential):
     def forward(self, net):
         net = self.reduc.forward(net)
         if not self.is_final:
-            theta = self.sigmoid(net[:, 0, :, :]) * math.pi / 3
-            phi = self.sigmoid(net[:, 1, :, :]) * math.pi * 2
-            dist = self.sigmoid(net[:, 2, :, :]) * self.max_depth
-            n1 = torch.mul(torch.sin(theta), torch.cos(phi)).unsqueeze(1)
-            n2 = torch.mul(torch.sin(theta), torch.sin(phi)).unsqueeze(1)
-            n3 = torch.cos(theta).unsqueeze(1)
+            dist = self.sigmoid(net[:, 0, :, :]) * self.max_depth
             n4 = dist.unsqueeze(1)
-            net = torch.cat([n1, n2, n3, n4], dim=1)
+            net = n4 # 1 channel map
         
         return net
 
@@ -133,25 +131,17 @@ class local_planar_guidance(nn.Module):
         self.upratio = float(upratio)
 
     def forward(self, plane_eq, focal):
-        print('[HERE: In bts/pytorch.bts.py] before repeat_interleave plane_eq shape:', plane_eq.shape)
-        plane_eq_expanded = torch.repeat_interleave(plane_eq, int(self.upratio), 2)
-        plane_eq_expanded = torch.repeat_interleave(plane_eq_expanded, int(self.upratio), 3)
-        print('[HERE: In bts/pytorch.bts.py] after repeat_interleave plane_eq shape:', plane_eq_expanded.shape)
+        # here the use of `repeat_interleave` is essentially nearest upsampling
+        plane_eq_expanded = torch_nn_func.interpolate(plane_eq, scale_factor=int(self.upratio), mode='bilinear')
+    
+        n4 = plane_eq_expanded[:, 0, :, :]
         
-        n1 = plane_eq_expanded[:, 0, :, :]
-        n2 = plane_eq_expanded[:, 1, :, :]
-        n3 = plane_eq_expanded[:, 2, :, :]
-        n4 = plane_eq_expanded[:, 3, :, :]
-        
-        u = self.u.repeat(plane_eq.size(0), plane_eq.size(2) * int(self.upratio), plane_eq.size(3)).cuda()
-        u = (u - (self.upratio - 1) * 0.5) / self.upratio
-        
-        v = self.v.repeat(plane_eq.size(0), plane_eq.size(2), plane_eq.size(3) * int(self.upratio)).cuda()
-        v = (v - (self.upratio - 1) * 0.5) / self.upratio
+        output = n4
 
-        output = n4 / (n1 * u + n2 * v + n3)
-        print('[HERE: In /pytorch_nd3/bts/local_planar_guidance] output shape:', output.shape)
-        print('[HERE: In /pytorch_nd3/bts/local_planar_guidance] denominator min:', (n1 * u + n2 * v + n3).min())
+        # args.debug not implemented yet
+        #if args.debug:
+        #    print('[HERE: In bts/pytorch_nd3/bts_upsample/local_planar_guidance] output shape:', output.shape)
+        #    print('[HERE: In bts/pytorch_nd3/bts_upsample/local_planar_guidance] denominator min:', (n1 * u + n2 * v + n3).min())
 
         return output
 
@@ -230,13 +220,11 @@ class bts(nn.Module):
         daspp_feat = self.daspp_conv(concat4_daspp)
         
         reduc8x8 = self.reduc8x8(daspp_feat)
-
-        ### normalize plane normal
-        plane_normal_8x8 = reduc8x8[:, :3, :, :]
-        plane_normal_8x8 = torch_nn_func.normalize(plane_normal_8x8, 2, 1)
-        plane_dist_8x8 = reduc8x8[:, 3, :, :]
-        plane_eq_8x8 = torch.cat([plane_normal_8x8, plane_dist_8x8.unsqueeze(1)], 1)
-        depth_8x8 = self.lpg8x8(plane_eq_8x8, focal)
+        #plane_normal_8x8 = reduc8x8[:, :3, :, :]
+        #plane_normal_8x8 = torch_nn_func.normalize(plane_normal_8x8, 2, 1)
+        #plane_dist_8x8 = reduc8x8[:, 0, :, :]
+        #plane_eq_8x8 = torch.cat([plane_normal_8x8, plane_dist_8x8.unsqueeze(1)], 1)
+        depth_8x8 = self.lpg8x8(reduc8x8, focal)
         depth_8x8_scaled = depth_8x8.unsqueeze(1) / self.params.max_depth
         depth_8x8_scaled_ds = torch_nn_func.interpolate(depth_8x8_scaled, scale_factor=0.25, mode='nearest')
         
@@ -246,11 +234,11 @@ class bts(nn.Module):
         iconv3 = self.conv3(concat3)
         
         reduc4x4 = self.reduc4x4(iconv3)
-        plane_normal_4x4 = reduc4x4[:, :3, :, :]
-        plane_normal_4x4 = torch_nn_func.normalize(plane_normal_4x4, 2, 1)
-        plane_dist_4x4 = reduc4x4[:, 3, :, :]
-        plane_eq_4x4 = torch.cat([plane_normal_4x4, plane_dist_4x4.unsqueeze(1)], 1)
-        depth_4x4 = self.lpg4x4(plane_eq_4x4, focal)
+        #plane_normal_4x4 = reduc4x4[:, :3, :, :]
+        #plane_normal_4x4 = torch_nn_func.normalize(plane_normal_4x4, 2, 1)
+        #plane_dist_4x4 = reduc4x4[:, 3, :, :]
+        #plane_eq_4x4 = torch.cat([plane_normal_4x4, plane_dist_4x4.unsqueeze(1)], 1)
+        depth_4x4 = self.lpg4x4(reduc4x4, focal)
         depth_4x4_scaled = depth_4x4.unsqueeze(1) / self.params.max_depth
         depth_4x4_scaled_ds = torch_nn_func.interpolate(depth_4x4_scaled, scale_factor=0.5, mode='nearest')
         
@@ -260,11 +248,11 @@ class bts(nn.Module):
         iconv2 = self.conv2(concat2)
         
         reduc2x2 = self.reduc2x2(iconv2)
-        plane_normal_2x2 = reduc2x2[:, :3, :, :]
-        plane_normal_2x2 = torch_nn_func.normalize(plane_normal_2x2, 2, 1)
-        plane_dist_2x2 = reduc2x2[:, 3, :, :]
-        plane_eq_2x2 = torch.cat([plane_normal_2x2, plane_dist_2x2.unsqueeze(1)], 1)
-        depth_2x2 = self.lpg2x2(plane_eq_2x2, focal)
+        #plane_normal_2x2 = reduc2x2[:, :3, :, :]
+        #plane_normal_2x2 = torch_nn_func.normalize(plane_normal_2x2, 2, 1)
+        #plane_dist_2x2 = reduc2x2[:, 3, :, :]
+        #plane_eq_2x2 = torch.cat([plane_normal_2x2, plane_dist_2x2.unsqueeze(1)], 1)
+        depth_2x2 = self.lpg2x2(reduc2x2, focal)
         depth_2x2_scaled = depth_2x2.unsqueeze(1) / self.params.max_depth
         
         upconv1 = self.upconv1(iconv2)
@@ -331,8 +319,11 @@ class BtsModel(nn.Module):
 
     def forward(self, x, focal):
         skip_feat = self.encoder(x)
-        print('[HERE: In pytorch_nd3/bts.py] printing skip features.')
-        for i, feat in enumerate(skip_feat):
-            print('[HERE: In pytorch_nd3/bts.py] feat %d shape:' % i, feat.shape)
+        
+        # args.debug not implemented yet
+        #if args.debug:
+        #    print('[HERE: In pytorch_nd3/bts.py] printing skip features.')
+        #    for i, feat in enumerate(skip_feat):
+        #        print('[HERE: In pytorch_nd3/bts.py] feat %d shape:' % i, feat.shape)
         return self.decoder(skip_feat, focal)
     
