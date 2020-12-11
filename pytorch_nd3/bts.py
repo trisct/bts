@@ -319,5 +319,8 @@ class BtsModel(nn.Module):
 
     def forward(self, x, focal):
         skip_feat = self.encoder(x)
+        print('[HERE: In pytorch_nd3/bts.py] printing skip features.')
+        for i, feat in enumerate(skip_feat):
+            print('[HERE: In pytorch_nd3/bts.py] feat %d shape:' % i, feat.shape)
         return self.decoder(skip_feat, focal)
     
